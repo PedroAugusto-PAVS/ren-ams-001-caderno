@@ -509,6 +509,9 @@
       .print-batch {
         display: none;
       }
+      .print-notes {
+        display: none;
+      }
       @media print {
         @page {
           size: A4 landscape;
@@ -537,17 +540,18 @@
           border: 0;
           box-shadow: none;
           border-radius: 0;
-          padding: 11mm;
-          min-height: 210mm;
+          padding: 4mm 6mm;
+          min-height: 0;
         }
         .sheet-head {
-          padding-bottom: 10px;
+          padding-bottom: 4px;
         }
         .sheet-head h2 {
-          font-size: 14px;
+          font-size: 12px;
         }
         .meta-grid {
-          margin: 9px 0;
+          margin: 4px 0;
+          gap: 6px;
         }
         .field input,
         .field select,
@@ -560,52 +564,65 @@
           background: transparent;
         }
         .field label {
-          font-size: 9px;
+          font-size: 8px;
+        }
+        .field {
+          gap: 2px;
+          margin: 4px 0;
         }
         .block {
-          margin-top: 11px;
+          margin-top: 5px;
         }
         .block-head {
-          margin-bottom: 5px;
+          margin-bottom: 2px;
         }
         table {
           min-width: 0;
         }
         th {
-          font-size: 7px;
-          padding: 5px 4px;
+          font-size: 6px;
+          padding: 2px 3px;
         }
         td {
-          padding: 3px 4px;
+          padding: 1px 3px;
         }
         .cell-input {
-          font-size: 9px;
+          font-size: 8px;
           min-width: 0;
+          padding: 1px 2px;
         }
         .param {
-          font-size: 9px;
+          font-size: 8px;
           min-width: 0;
         }
         .standard {
-          font-size: 8px;
+          font-size: 7px;
         }
         .status {
-          font-size: 8px;
+          font-size: 7px;
           min-width: 54px;
-          padding: 3px 5px;
+          padding: 2px 4px;
         }
         .idrow {
-          margin-top: 8px;
+          margin-top: 4px;
         }
         .signature {
-          margin-top: 16px;
-          padding-top: 12px;
+          margin-top: 6px;
+          padding-top: 5px;
+          gap: 12px;
         }
         .notes {
-          margin-top: 8px;
+          margin-top: 4px;
         }
         .notes textarea {
-          min-height: 35px;
+          display: none;
+        }
+        .print-notes {
+          display: block;
+          font-size: 7px;
+          line-height: 1.15;
+          white-space: pre-wrap;
+          overflow-wrap: anywhere;
         }
         .simulation-banner {
           border: 2px solid #9a3d1e;
@@ -623,8 +640,9 @@
         .print-batch .sheet {
           width: 297mm;
           height: 210mm;
-          min-height: 210mm;
+          min-height: 0;
           margin: 0;
+          padding: 4mm 6mm;
           page-break-after: always;
           break-after: page;
           page-break-inside: avoid;
@@ -1364,7 +1382,7 @@ ${pageGroups
         )}" placeholder="Identificação dos equipamentos"></div></div>
 <div class="field notes"><label>Observações</label><textarea data-meta="notes" placeholder="Anotações de campo">${esc(
           p.notes
-        )}</textarea></div>
+        )}</textarea><div class="print-notes">${esc(p.notes).replace(/\n/g, "<br>")}</div></div>
 <footer class="signature"><div class="sign-line">Responsável</div><div class="sign-line">Conferido por: ${esc(
           p.reviewer || ""
         )}</div><div class="sign-line">Data: ${
@@ -1378,6 +1396,8 @@ ${pageGroups
             const update = (e) => {
               const field = e.target.dataset.meta;
               p[field] = e.target.type === "checkbox" ? e.target.checked : e.target.value;
+              if (field === "notes")
+                $("#sheet").querySelector(".print-notes").innerHTML = esc(p.notes).replace(/\n/g, "<br>");
               persist();
               if (["date", "activity", "potableCollected", "reviewer"].includes(field))
                 renderSheet();
