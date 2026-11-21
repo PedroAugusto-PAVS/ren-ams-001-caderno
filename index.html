@@ -1667,7 +1667,7 @@ ${pageGroups
         renderAll();
 
       };
-      $("#print").onclick = () => window.print();
+      $("#print").onclick = () => printPages([state.active]);
       function printPages(indexes) {
         const active = state.active;
         const previousView = state.view;
@@ -1691,6 +1691,21 @@ ${pageGroups
         renderAll();
         batch.innerHTML = html.join("");
         document.body.classList.add("print-all");
+        window.addEventListener(
+          "beforeprint",
+          () => {
+            for (const sheet of batch.querySelectorAll(".sheet")) {
+              const available = sheet.clientHeight;
+              const content = sheet.scrollHeight;
+              if (available > 0 && content > available) {
+                const scale = Math.min(1, available / content);
+                sheet.style.transform = `scale(${scale})`;
+                sheet.style.transformOrigin = "top center";
+              }
+            }
+          },
+          { once: true }
+        );
         window.addEventListener(
           "afterprint",
           () => {
