@@ -796,7 +796,7 @@
           </div>
           <div class="field">
             <label for="pageNo">Página do caderno</label
-            ><input id="pageNo" type="number" min="1" value="1" />
+            ><input id="pageNo" type="number" min="1" value="1" readonly />
           </div>
           <div class="criteria">
             <div class="criteria-head">
@@ -957,6 +957,14 @@
         state.pages = activeFolder.pages;
       }
       ensureFolders();
+      function renumberPages(pages) {
+        pages.sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")) || (+a.page || 0) - (+b.page || 0));
+        pages.forEach((item, index) => { item.page = index + 1; });
+      }
+      const initiallyActivePage = state.pages[state.active] || state.pages[0];
+      state.folders.forEach((folder) => renumberPages(folder.pages));
+      state.pages = state.folders.find((folder) => folder.id === state.activeFolderId).pages;
+      state.active = Math.max(0, state.pages.indexOf(initiallyActivePage));
       if (!state.criteria) state.criteria = structuredClone(defaultCriteria);
       if (!state.pages?.length) state.pages = [fresh()];
       if (!Array.isArray(state.lots)) state.lots = [];
@@ -1594,6 +1602,13 @@ ${pageGroups
             key === "page" ? Number(e.target.value) : e.target.value;
           persist();
           if (key === "page") tabsUI();
+          if (key === "date") {
+            const current = page();
+            renumberPages(state.pages);
+            state.active = state.pages.indexOf(current);
+            persist();
+            renderAll();
+          }
           if (key === "reviewer") {
             if (state.view === "lots") renderLots();
             else renderSheet();
@@ -1602,8 +1617,8 @@ ${pageGroups
       );
       $("#newPage").onclick = () => {
         const n = fresh();
-        n.page = Math.max(...state.pages.map((p) => +p.page || 0)) + 1;
         state.pages.push(n);
+        renumberPages(state.pages);
         state.active = state.pages.length - 1;
         state.view = "pages";
         persist();
@@ -1619,6 +1634,7 @@ ${pageGroups
         const label = `página ${p.page || state.active + 1}${p.date ? " (" + new Date(p.date + "T12:00:00").toLocaleDateString("pt-BR") + ")" : ""}`;
         if (!confirm(`Excluir a ${label}? Esta ação remove os dados dessa página deste navegador.`)) return;
         state.pages.splice(state.active, 1);
+        renumberPages(state.pages);
         state.active = Math.min(state.active, state.pages.length - 1);
         persist();
         renderAll();
@@ -1661,13 +1677,12 @@ ${pageGroups
           toast("Já existem páginas para todas as datas do período");
           return;
         }
-        let number = Math.max(0, ...state.pages.map((p) => +p.page || 0));
         for (const date of missing) {
           const n = fresh();
           n.date = date;
-          n.page = ++number;
           state.pages.push(n);
         }
+        renumberPages(state.pages);
         state.active = state.pages.findIndex((p) => p.date === dates[0]);
         state.view = "pages";
         persist();
@@ -1704,6 +1719,7 @@ ${pageGroups
         const activePage = page();
         state.pages = state.pages.filter((item) => !dateSet.has(item.date));
         if (!state.pages.length) state.pages = [fresh()];
+        renumberPages(state.pages);
         state.active = Math.max(0, state.pages.indexOf(activePage));
         state.view = "pages";
         persist();
@@ -1735,6 +1751,15 @@ ${pageGroups
               item = items[choice],
               value = item.zero ? 0 : randomInRange(item.min, item.max, 2),
               id = definition.id;
+            if (key === "temperature") {
+              const prior = p.rows[id];
+              if (prior) {
+                delete prior.obtained;
+                delete prior.reference;
+                delete prior.status;
+              }
+              continue;
+            }
             p.rows[id] = {
               ...(p.rows[id] || {}),
               standard: choice,
