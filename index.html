@@ -1022,7 +1022,17 @@
       function parseNum(s) {
         if (typeof s === "number") return s;
         if (!s) return NaN;
-        return Number(String(s).trim().replace(/\./g, "").replace(",", "."));
+        let value = String(s).trim().replace(/\s/g, "");
+        const comma = value.lastIndexOf(",");
+        const dot = value.lastIndexOf(".");
+        if (comma >= 0 && dot >= 0) {
+          value = comma > dot
+            ? value.replace(/\./g, "").replace(",", ".")
+            : value.replace(/,/g, "");
+        } else if (comma >= 0) {
+          value = value.replace(",", ".");
+        }
+        return Number(value);
       }
       function statusClass(s) {
         return s === "Conforme"
