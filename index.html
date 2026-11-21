@@ -912,6 +912,8 @@
       };
       if (!state.criteria) state.criteria = structuredClone(defaultCriteria);
       if (!state.pages?.length) state.pages = [fresh()];
+      if (!Array.isArray(state.lots)) state.lots = [];
+      if (!state.view) state.view = "pages";
       let pendingBackup = null;
       const $ = (s) => document.querySelector(s),
         page = () => state.pages[state.active];
@@ -963,19 +965,100 @@
             state.criteria[t.dataset.ci].items[+t.dataset.i][t.dataset.bound] =
               Number(t.value);
             persist();
-            renderSheet();
+            if (state.view === "lots") renderLots();
+            else renderSheet();
+          })
+        );
+      }
+      function renderLots() {
+        const keys = Object.keys(state.criteria);
+        const rows = state.lots
+          .map((lot, i) => {
+            const c = state.criteria[lot.parameter] || state.criteria[keys[0]];
+            const standards = c.items
+              .map(
+                (item, index) =>
+                  `<option value="${index}" ${+lot.standard === index ? "selected" : ""}>${esc(item.p)}${c.unit ? " " + esc(c.unit) : ""}</option>`
+              )
+              .join("");
+            return `<tr><td><select class="cell-input" data-lot-index="${i}" data-lot-field="parameter">${keys
+              .map(
+                (key) =>
+                  `<option value="${key}" ${lot.parameter === key ? "selected" : ""}>${esc(state.criteria[key].label)}</option>`
+              )
+              .join("")}</select></td><td><select class="cell-input" data-lot-index="${i}" data-lot-field="standard">${standards}</select></td><td><input class="cell-input" data-lot-index="${i}" data-lot-field="code" value="${esc(lot.code)}" placeholder="ID do padrão / lote"></td><td><label style="display:flex;align-items:center;gap:6px;font-size:11px"><input type="checkbox" data-lot-index="${i}" data-lot-field="preferred" ${lot.preferred ? "checked" : ""}> Usar automaticamente</label></td><td><button class="btn" data-remove-lot="${i}" aria-label="Remover lote">Remover</button></td></tr>`;
+          })
+          .join("");
+        $("#sheet").innerHTML = `<div class="sheet-head"><div><div class="kicker">CADASTRO CENTRAL</div><h2>Padrões e lotes</h2><p>Cadastre cada lote uma vez. As páginas usarão o lote marcado como automático para o parâmetro e o padrão escolhido.</p></div><button class="btn primary" id="addLot">＋ Adicionar lote</button></div>${state.lots.length ? `<div class="table-wrap" style="margin-top:18px"><table style="min-width:760px"><thead><tr><th>Parâmetro</th><th>Valor do padrão</th><th>ID padrão / lote</th><th>Preenchimento</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : `<div class="subtle" style="padding:32px 12px;text-align:center">Nenhum lote cadastrado ainda. Adicione um lote para ele aparecer automaticamente nas páginas.</div>`}<p class="subtle" style="margin-top:14px">Se houver mais de um lote para o mesmo padrão, escolha qual será preenchido automaticamente. Nas páginas, você ainda poderá selecionar outro lote cadastrado ou digitar um excepcional.</p>`;
+        $("#addLot").onclick = () => {
+          const parameter = keys[0];
+          const standard = 0;
+          state.lots.push({
+            id: globalThis.crypto?.randomUUID?.() || `lot-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            parameter,
+            standard,
+            code: "",
+            preferred: !preferredLot(parameter, standard),
+          });
+          persist();
+          renderAll();
+        };
+        $("#sheet").querySelectorAll("[data-lot-field]").forEach((el) => {
+          const eventName = el.dataset.lotField === "code" ? "input" : "change";
+          el.addEventListener(eventName, (event) => {
+            const target = event.target;
+            const lot = state.lots[+target.dataset.lotIndex];
+            const field = target.dataset.lotField;
+            lot[field] = field === "standard" ? +target.value : field === "preferred" ? target.checked : target.value;
+            if (field === "parameter") lot.standard = 0;
+            const group = lotsFor(lot.parameter, lot.standard);
+            if (field === "preferred" && lot.preferred) {
+              group.forEach((other) => { other.preferred = other.id === lot.id; });
+            } else if ((field === "parameter" || field === "standard") && lot.preferred) {
+              group.forEach((other) => { other.preferred = other.id === lot.id; });
+            } else if ((field === "parameter" || field === "standard") && !group.some((other) => other.preferred)) {
+              lot.preferred = true;
+            } else if (field === "preferred" && !lot.preferred && !group.some((other) => other.preferred)) {
+              lot.preferred = true;
+            }
+            persist();
+            if (field !== "code") renderAll();
+          });
+        });
+        $("#sheet").querySelectorAll("[data-remove-lot]").forEach((button) =>
+          button.addEventListener("click", () => {
+            const [removed] = state.lots.splice(+button.dataset.removeLot, 1);
+            const replacement = preferredLot(removed.parameter, removed.standard);
+            for (const p of state.pages) for (const entry of Object.values(p.rows || {})) {
+              if (entry.lotRef !== removed.id) continue;
+              entry.lotRef = replacement?.id || "";
+              if (!replacement) { entry.lot = removed.code; entry.manualLot = true; }
+            }
+            persist();
+            renderAll();
           })
         );
       }
       function tabsUI() {
         const root = $("#tabs");
         root.innerHTML = "";
+        const lotsTab = document.createElement("button");
+        lotsTab.className = "tab" + (state.view === "lots" ? " active" : "");
+        lotsTab.textContent = "Padrões e lotes";
+        lotsTab.onclick = () => {
+          state.view = "lots";
+          persist();
+          renderAll();
+        };
+        root.appendChild(lotsTab);
         state.pages.forEach((p, i) => {
           const b = document.createElement("button");
-          b.className = "tab" + (i === state.active ? " active" : "");
+          b.className =
+            "tab" + (state.view !== "lots" && i === state.active ? " active" : "");
           b.textContent = `Página ${p.page || i + 1}`;
           b.onclick = () => {
             state.active = i;
+            state.view = "pages";
             persist();
             renderAll();
           };
@@ -990,6 +1073,30 @@
           key = arr[1],
           list = state.criteria[key].items;
         return page().rows[selectedKey(g, r)]?.standard ?? 0;
+      }
+      function lotsFor(parameter, standard) {
+        return state.lots.filter(
+          (lot) => lot.parameter === parameter && +lot.standard === +standard
+        );
+      }
+      function preferredLot(parameter, standard) {
+        const lots = lotsFor(parameter, standard);
+        return lots.find((lot) => lot.preferred) || lots[0] || null;
+      }
+      function lotCell(g, r, parameter, standard, entry) {
+        const lots = lotsFor(parameter, standard);
+        if (!lots.length)
+          return inputCell(g, r, "lot", entry.lot, "Lote / identificação");
+        const preferred = preferredLot(parameter, standard);
+        let selected = entry.lotRef || (!entry.manualLot && !entry.lot ? preferred?.id : "") || "";
+        if (entry.manualLot || (entry.lot && !entry.lotRef)) selected = "__manual__";
+        const options = lots
+          .map(
+            (lot) =>
+              `<option value="${esc(lot.id)}" ${selected === lot.id ? "selected" : ""}>${esc(lot.code || "Lote sem identificação")}${lot.preferred ? " · padrão" : ""}</option>`
+          )
+          .join("");
+        return `<select class="cell-input" data-g="${g}" data-r="${r}" data-field="lotRef" aria-label="Lote para ${parameter}"><option value="" ${!selected ? "selected" : ""}>Selecione um lote</option>${options}<option value="__manual__" ${selected === "__manual__" ? "selected" : ""}>Digitar outro lote</option></select>${selected === "__manual__" ? inputCell(g, r, "lot", entry.lot, "Lote / identificação") : ""}`;
       }
       function inputCell(g, r, field, value, placeholder = "", type = "text") {
         return `<input class="cell-input" data-g="${g}" data-r="${r}" data-field="${field}" type="${type}" ${
@@ -1088,13 +1195,7 @@ ${groups
                   state.criteria[key].unit ? " " + state.criteria[key].unit : ""
                 }</option>`
             )
-            .join("")}</select></td><td>${inputCell(
-            g,
-            r,
-            "lot",
-            entry.lot,
-            "Lote / identificação"
-          )}</td><td>${inputCell(
+            .join("")}</select></td><td>${lotCell(g, r, key, index, entry)}</td><td>${inputCell(
             g,
             r,
             "obtained",
@@ -1155,10 +1256,27 @@ ${groups
                 r = +t.dataset.r,
                 k = selectedKey(g, r);
               p.rows[k] ??= {};
-              p.rows[k][t.dataset.field] =
-                t.dataset.field === "standard" ? +t.value : t.value;
-              persist();
-              renderSheet();
+              const field = t.dataset.field;
+              if (field === "lotRef") {
+                if (t.value === "__manual__") {
+                  p.rows[k].manualLot = true;
+                  p.rows[k].lotRef = "";
+                } else {
+                  p.rows[k].manualLot = false;
+                  p.rows[k].lotRef = t.value;
+                  p.rows[k].lot = "";
+                }
+              } else if (field === "standard") {
+                p.rows[k].standard = +t.value;
+                if (!p.rows[k].manualLot)
+                  p.rows[k].lotRef = preferredLot(groups[g].rows[r][1], +t.value)?.id || "";
+              } else {
+                p.rows[k][field] = t.value;
+                if (field === "lot") p.rows[k].manualLot = true;
+              }
+            persist();
+            if (state.view === "lots") renderLots();
+            else renderSheet();
             })
           );
         $("#sheet")
@@ -1205,12 +1323,16 @@ ${groups
         tabsUI();
         syncMeta();
         criteriaUI();
-        renderSheet();
+        for (const id of ["deletePage", "print", "demoCurrent", "demoAll"])
+          $("#" + id).hidden = state.view === "lots";
+        if (state.view === "lots") renderLots();
+        else renderSheet();
       }
       $("#autoMode").addEventListener("change", (e) => {
         state.auto = e.target.checked;
         persist();
-        renderSheet();
+        if (state.view === "lots") renderLots();
+        else renderSheet();
       });
       [
         ["recordDate", "date"],
@@ -1224,7 +1346,10 @@ ${groups
             key === "page" ? Number(e.target.value) : e.target.value;
           persist();
           if (key === "page") tabsUI();
-          if (key === "reviewer") renderSheet();
+          if (key === "reviewer") {
+            if (state.view === "lots") renderLots();
+            else renderSheet();
+          }
         })
       );
       $("#newPage").onclick = () => {
@@ -1232,6 +1357,7 @@ ${groups
         n.page = Math.max(...state.pages.map((p) => +p.page || 0)) + 1;
         state.pages.push(n);
         state.active = state.pages.length - 1;
+        state.view = "pages";
         persist();
         renderAll();
         window.scrollTo({ top: 0, behavior: "smooth" });
@@ -1301,6 +1427,7 @@ ${groups
           state.pages.push(n);
         }
         state.active = state.pages.findIndex((p) => p.date === dates[0]);
+        state.view = "pages";
         persist();
         renderAll();
         $("#batchPanel").hidden = true;
@@ -1452,6 +1579,11 @@ ${groups
         );
         state.active = 0;
         if (incoming.criteria) state.criteria = incoming.criteria;
+        if (Array.isArray(incoming.lots)) {
+          const lotsById = new Map(state.lots.map((lot) => [lot.id, lot]));
+          for (const lot of incoming.lots) lotsById.set(lot.id, lot);
+          state.lots = [...lotsById.values()];
+        }
         state.auto = !!incoming.auto;
       }
       $("#backupExport").onclick = downloadBackup;
@@ -1493,7 +1625,7 @@ ${groups
           )
         )
           return;
-        state = { ...pendingBackup, active: 0 };
+        state = { ...pendingBackup, active: 0, lots: pendingBackup.lots || [], view: "pages" };
         pendingBackup = null;
         persist();
         renderAll();
