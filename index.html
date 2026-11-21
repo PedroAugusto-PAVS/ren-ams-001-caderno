@@ -512,7 +512,7 @@
       @media print {
         @page {
           size: A4 landscape;
-          margin: 11mm;
+          margin: 0;
         }
         body {
           background: white;
@@ -537,8 +537,8 @@
           border: 0;
           box-shadow: none;
           border-radius: 0;
-          padding: 0;
-          min-height: 0;
+          padding: 11mm;
+          min-height: 210mm;
         }
         .sheet-head {
           padding-bottom: 10px;
@@ -621,12 +621,19 @@
           display: block !important;
         }
         .print-batch .sheet {
+          width: 297mm;
+          height: 210mm;
+          min-height: 210mm;
+          margin: 0;
           page-break-after: always;
           break-after: page;
+          page-break-inside: avoid;
+          break-inside: avoid;
         }
         .print-batch .sheet:last-child {
           page-break-after: auto;
           break-after: auto;
+          margin-bottom: 0;
         }
       }
     </style>
@@ -655,7 +662,7 @@
         </div>
         <div class="actions">
           <button class="btn" id="newPage">＋ Nova página</button
-          ><button class="btn soft" id="batchOpen">▦ Gerar mês</button
+          ><button class="btn soft" id="batchOpen">▦ Gerar por período</button
           ><button class="btn" id="demoCurrent">◎ Simular esta página</button
           ><button class="btn" id="demoAll">◎ Simular todas</button
           ><button class="btn" id="backupExport">↓ Exportar backup</button
@@ -707,33 +714,27 @@
           "
         >
           <div>
-            <h2 class="section-title">Gerar páginas do mês</h2>
+            <h2 class="section-title">Gerar ou imprimir por período</h2>
             <div class="subtle">
-              Cria uma página em branco por dia. Você poderá preencher e
-              imprimir o mês todo.
+              Cria uma página em branco para cada dia sem registro no intervalo,
+              ou imprime apenas as páginas com datas dentro dele.
             </div>
           </div>
           <div
             style="display: flex; align-items: end; gap: 9px; flex-wrap: wrap"
           >
             <div class="field" style="margin: 0">
-              <label for="batchMonth">Mês</label
-              ><select id="batchMonth"></select>
+              <label for="periodStart">Data inicial</label
+              ><input id="periodStart" type="date" />
             </div>
             <div class="field" style="margin: 0">
-              <label for="batchYear">Ano</label
-              ><input
-                id="batchYear"
-                type="number"
-                min="2000"
-                max="2100"
-                style="width: 100px"
-              />
+              <label for="periodEnd">Data final</label
+              ><input id="periodEnd" type="date" />
             </div>
-            <button class="btn primary" id="batchGenerate">
-              Criar páginas
-            </button>
+            <button class="btn primary" id="periodGenerate">Criar páginas</button>
+            <button class="btn" id="periodPrint">PDF deste período</button>
           </div>
+          <div class="subtle" style="margin-top: 10px">No diálogo de impressão, desative “Cabeçalhos e rodapés” para não incluir URL e data do navegador.</div>
         </div>
       </section>
       <div class="layout">
@@ -1503,47 +1504,41 @@ ${pageGroups
         renderAll();
         toast("Página excluída");
       };
-      const monthNames = [
-        "Janeiro",
-        "Fevereiro",
-        "Março",
-        "Abril",
-        "Maio",
-        "Junho",
-        "Julho",
-        "Agosto",
-        "Setembro",
-        "Outubro",
-        "Novembro",
-        "Dezembro",
-      ];
-      $("#batchMonth").innerHTML = monthNames
-        .map((m, i) => `<option value="${i}">${m}</option>`)
-        .join("");
-      $("#batchMonth").value = new Date().getMonth();
-      $("#batchYear").value = new Date().getFullYear();
+      const today = new Date();
+      const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+      const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+      const toLocalDateString = (date) =>
+        `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+      $("#periodStart").value = toLocalDateString(monthStart);
+      $("#periodEnd").value = toLocalDateString(monthEnd);
       $("#batchOpen").onclick = () => {
         $("#batchPanel").hidden = !$("#batchPanel").hidden;
       };
-      $("#batchGenerate").onclick = () => {
-        const month = +$("#batchMonth").value,
-          year = +$("#batchYear").value;
-        if (!Number.isInteger(year) || year < 2000 || year > 2100) {
-          toast("Informe um ano entre 2000 e 2100");
-          return;
+      function getPeriodDates() {
+        const startText = $("#periodStart").value;
+        const endText = $("#periodEnd").value;
+        if (!startText || !endText || startText > endText) {
+          toast("Informe um intervalo válido, com a data inicial antes da final");
+          return null;
         }
-        const days = new Date(year, month + 1, 0).getDate(),
-          existing = new Set(state.pages.map((p) => p.date).filter(Boolean)),
-          dates = Array.from(
-            { length: days },
-            (_, d) =>
-              `${year}-${String(month + 1).padStart(2, "0")}-${String(
-                d + 1
-              ).padStart(2, "0")}`
-          ),
-          missing = dates.filter((d) => !existing.has(d));
+        const start = new Date(`${startText}T00:00:00Z`).getTime();
+        const end = new Date(`${endText}T00:00:00Z`).getTime();
+        if (!Number.isFinite(start) || !Number.isFinite(end)) {
+          toast("Confira as datas do período");
+          return null;
+        }
+        const dates = [];
+        for (let time = start; time <= end; time += 86400000)
+          dates.push(new Date(time).toISOString().slice(0, 10));
+        return dates;
+      }
+      $("#periodGenerate").onclick = () => {
+        const dates = getPeriodDates();
+        if (!dates) return;
+        const existing = new Set(state.pages.map((p) => p.date).filter(Boolean));
+        const missing = dates.filter((date) => !existing.has(date));
         if (!missing.length) {
-          toast("Já existem páginas para todos os dias deste mês");
+          toast("Já existem páginas para todas as datas do período");
           return;
         }
         let number = Math.max(0, ...state.pages.map((p) => +p.page || 0));
@@ -1559,9 +1554,22 @@ ${pageGroups
         renderAll();
         $("#batchPanel").hidden = true;
         toast(
-          `${missing.length} páginas criadas para ${monthNames[month]} de ${year}`
+          `${missing.length} páginas criadas no período selecionado`
         );
         window.scrollTo({ top: 0, behavior: "smooth" });
+      };
+      $("#periodPrint").onclick = () => {
+        const dates = getPeriodDates();
+        if (!dates) return;
+        const dateSet = new Set(dates);
+        const indexes = state.pages
+          .map((p, i) => (dateSet.has(p.date) ? i : -1))
+          .filter((i) => i >= 0);
+        if (!indexes.length) {
+          toast("Não há páginas cadastradas nesse período");
+          return;
+        }
+        printPages(indexes);
       };
       $("#print").onclick = () => window.print();
       $("#resetCriteria").onclick = () => {
@@ -1622,12 +1630,18 @@ ${pageGroups
 
       };
       $("#print").onclick = () => window.print();
-      $("#printAll").onclick = () => {
-        const active = state.active,
-          batch = $("#printBatch");
+      function printPages(indexes) {
+        const active = state.active;
+        const previousView = state.view;
+        const batch = $("#printBatch");
+        indexes.sort((a, b) =>
+          state.pages[a].date.localeCompare(state.pages[b].date) ||
+          (+state.pages[a].page || 0) - (+state.pages[b].page || 0)
+        );
         batch.innerHTML = "";
         const html = [];
-        for (let i = 0; i < state.pages.length; i++) {
+        state.view = "pages";
+        for (const i of indexes) {
           state.active = i;
           renderSheet();
           html.push(
@@ -1635,7 +1649,8 @@ ${pageGroups
           );
         }
         state.active = active;
-        renderSheet();
+        state.view = previousView;
+        renderAll();
         batch.innerHTML = html.join("");
         document.body.classList.add("print-all");
         window.addEventListener(
@@ -1643,11 +1658,14 @@ ${pageGroups
           () => {
             document.body.classList.remove("print-all");
             batch.innerHTML = "";
+            renderAll();
           },
           { once: true }
         );
         window.print();
-      };
+      }
+      $("#printAll").onclick = () =>
+        printPages(state.pages.map((_, i) => i));
       $("#resetCriteria").onclick = () => {
         state.criteria = structuredClone(defaultCriteria);
         persist();
