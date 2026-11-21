@@ -846,7 +846,7 @@
         temperature: {
           label: "Temperatura",
           unit: "°C",
-          items: [{ p: "1 a 70 °C", min: 1, max: 70, absolute: true }],
+          items: [{ p: "1 a 70 °C", min: 1, max: 70, absolute: true, tolerance: 0.5 }],
         },
       };
       function isMonday(date) {
@@ -924,11 +924,19 @@
         return Number(text.replace(",", "."));
       }
       function migrateCaderno() {
-        if (state.formVersion === 2) return;
+        if (state.formVersion === 3) return;
         const oldCriteria = state.criteria || {};
         const nextCriteria = structuredClone(defaultCriteria);
-        for (const key of ["oxygen", "chlorine", "temperature"])
+        for (const key of ["oxygen", "chlorine"])
           if (oldCriteria[key]) nextCriteria[key] = oldCriteria[key];
+        if (oldCriteria.temperature?.items?.length)
+          nextCriteria.temperature.items = oldCriteria.temperature.items.map((item) => ({
+            ...item,
+            min: item.min ?? 1,
+            max: item.max ?? 70,
+            absolute: true,
+            tolerance: 0.5,
+          }));
         for (const key of ["ph", "orp"])
           nextCriteria[key].items = nextCriteria[key].items.map((item) => {
             const old = (oldCriteria[key]?.items || []).find(
@@ -1030,7 +1038,7 @@
         }
         state.lots = state.lots.filter((lot) => !invalidLots.has(lot.id));
         state.criteria = nextCriteria;
-        state.formVersion = 2;
+        state.formVersion = 3;
       }
       migrateCaderno();
       function normalizeBackupState(incoming) {
@@ -1251,6 +1259,14 @@
             ? "Não conforme"
             : "Manual";
         if (!Number.isFinite(n)) return "Pendente";
+        if (item.tolerance !== undefined) {
+          const reference = parseNum(row.reference);
+          if (!Number.isFinite(reference)) return "Pendente";
+          const inRange = (value) => value >= item.min && value <= item.max;
+          return inRange(n) && inRange(reference) && Math.abs(n - reference) <= item.tolerance
+            ? "Conforme"
+            : "Não conforme";
+        }
         const ok = item.absolute
           ? n >= item.min && n <= item.max
           : item.zero
@@ -1314,12 +1330,14 @@ ${pageGroups
             entry = p.rows[row.id] || {},
             st = status(g, r);
           return `<tr><td><div class="param">${name}</div><div class="standard">Aceitação: ${
-            it.absolute
+            it.tolerance !== undefined
+              ? `± ${fmt(it.tolerance)} ${state.criteria[key].unit} · faixa ${fmt(it.min)} a ${fmt(it.max)} ${state.criteria[key].unit}`
+              : it.absolute
               ? `${fmt(it.min)}–${fmt(it.max)}`
               : `${fmt(it.min)} a ${fmt(it.max)}`
           } ${
             state.criteria[key].unit
-          }</div></td><td><span class="cell-input" style="display:block">${esc(it.p)}${state.criteria[key].unit ? " " + esc(state.criteria[key].unit) : ""}</span></td><td>${lotCell(g, r, key, index, entry)}</td><td>${inputCell(
+          }</div></td><td>${row.key === "temperature" ? inputCell(g, r, "reference", entry.reference, "Referência °C", "number") : `<span class="cell-input" style="display:block">${esc(it.p)}${state.criteria[key].unit ? " " + esc(state.criteria[key].unit) : ""}</span>`}</td><td>${lotCell(g, r, key, index, entry)}</td><td>${inputCell(
             g,
             r,
             "obtained",
