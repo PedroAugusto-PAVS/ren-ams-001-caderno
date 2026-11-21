@@ -806,49 +806,28 @@
           label: "pH",
           unit: "",
           items: [
-            { p: "2,0", min: 1.8, max: 2.2 },
-            { p: "4,0", min: 3.8, max: 4.2 },
             { p: "7,0", min: 6.8, max: 7.2 },
+            { p: "4,0", min: 3.8, max: 4.2 },
             { p: "10,0", min: 9.8, max: 10.2 },
+            { p: "1,68", min: 1.48, max: 1.88 },
             { p: "12,0", min: 11.8, max: 12.2 },
           ],
         },
         orp: {
           label: "Potencial oxirredução (ORP)",
           unit: "mV",
-          items: [
-            { p: "229", min: 209, max: 249 },
-            { p: "240", min: 220, max: 260 },
-            { p: "470", min: 450, max: 490 },
-            { p: "476", min: 456, max: 496 },
-          ],
+          items: [{ p: "240", min: 220, max: 260 }],
         },
         cond: {
           label: "Condutividade",
           unit: "μS/cm",
-          items: [
-            { p: "1,00", min: 0.95, max: 1.05 },
-            { p: "500", min: 475, max: 525 },
-            { p: "1.400", min: 1330, max: 1470 },
-            { p: "12.000", min: 11400, max: 12600 },
-            { p: "100.000", min: 95000, max: 105000 },
-          ],
+          items: [{ p: "1413", min: 1342.35, max: 1483.65 }],
         },
         turbH: {
-          label: "Turbidez · HANNA",
+          label: "Turbidez",
           unit: "NTU",
           items: [
-            { p: "0,1", min: 0.01, max: 0.19 },
-            { p: "15", min: 12, max: 18 },
-            { p: "100", min: 92, max: 108 },
-            { p: "750", min: 730, max: 770 },
-          ],
-        },
-        turbY: {
-          label: "Turbidez · YSI ProDSS",
-          unit: "NTU",
-          items: [
-            { p: "0,1", min: -15, max: 15 },
+            { p: "0", min: -15, max: 15 },
             { p: "124", min: 109, max: 139 },
             { p: "1010", min: 995, max: 1025 },
           ],
@@ -869,31 +848,55 @@
           items: [{ p: "1 a 70 °C", min: 1, max: 70, absolute: true }],
         },
       };
-      const groups = [
-        {
-          title: "Verificação de padrões",
-          note: "Registre o padrão utilizado, o lote e a leitura observada.",
-          rows: [
-            ["pH", "ph", 5],
-            ["Condutividade", "cond", 3],
-            ["Oxigênio zero dissolvido", "oxygen", 1],
-            ["Potencial oxirredução (ORP)", "orp", 1],
-          ],
-        },
-        {
-          title: "Verificação em campo",
-          note: "Selecione o padrão adequado ao instrumento e à faixa de medição.",
-          rows: [
-            ["Turbidez · HANNA", "turbH", 4],
-            ["Turbidez · YSI ProDSS", "turbY", 3],
-            ["Cloro total / livre", "chlorine", 1],
-            ["Temperatura do ar", "temperature", 1],
-            ["Temperatura da amostra", "temperature", 1],
-          ],
-        },
-      ];
+      function isMonday(date) {
+        if (!date) return false;
+        const [year, month, day] = date.split("-").map(Number);
+        return new Date(year, month - 1, day).getDay() === 1;
+      }
+      function groupsFor(p) {
+        const calibration = p.activity === "calibration";
+        const phIndexes = calibration ? [0, 1, 2, 3, 4] : [0, 1, 2];
+        const fixedRow = (name, key, standard, id) => ({
+          name,
+          key,
+          standard,
+          id,
+          fixed: true,
+        });
+        const phRows = phIndexes.map((standard) =>
+          fixedRow(`pH ${state.criteria.ph.items[standard].p}`, "ph", standard, `ph-${standard}`)
+        );
+        const fieldRows = [0, 1, 2].map((standard) =>
+          fixedRow("Turbidez", "turbH", standard, `turb-${standard}`)
+        );
+        if (!calibration && isMonday(p.date) && p.potableCollected)
+          fieldRows.push(fixedRow("Cloro total / livre", "chlorine", 0, "chlorine"));
+        fieldRows.push(
+          fixedRow("Temperatura do ar", "temperature", 0, "temperature-air"),
+          fixedRow("Temperatura da amostra", "temperature", 0, "temperature-sample")
+        );
+        return [
+          {
+            title: calibration ? "Calibração" : "Verificação de padrões",
+            note: "Registre o padrão utilizado, o lote e a leitura observada.",
+            rows: [
+              ...phRows,
+              fixedRow("Condutividade", "cond", 0, "conductivity"),
+              fixedRow("Oxigênio zero dissolvido", "oxygen", 0, "oxygen"),
+              fixedRow("Potencial oxirredução (ORP)", "orp", 0, "orp"),
+            ],
+          },
+          {
+            title: calibration ? "Calibração em campo" : "Verificação em campo",
+            note: "Padrões de turbidez e temperaturas registrados em campo.",
+            rows: fieldRows,
+          },
+        ];
+      }
       const fresh = () => ({
         date: new Date().toISOString().slice(0, 10),
+        activity: "verification",
+        potableCollected: false,
         equipment: "",
         responsible: "",
         reviewer: "",
@@ -914,6 +917,134 @@
       if (!state.pages?.length) state.pages = [fresh()];
       if (!Array.isArray(state.lots)) state.lots = [];
       if (!state.view) state.view = "pages";
+      function standardNumber(value, key) {
+        const text = String(value ?? "").trim();
+        if (key === "cond") return Number(text.replace(/\./g, "").replace(",", "."));
+        return Number(text.replace(",", "."));
+      }
+      function migrateCaderno() {
+        if (state.formVersion === 2) return;
+        const oldCriteria = state.criteria || {};
+        const nextCriteria = structuredClone(defaultCriteria);
+        for (const key of ["oxygen", "chlorine", "temperature"])
+          if (oldCriteria[key]) nextCriteria[key] = oldCriteria[key];
+        for (const key of ["ph", "orp"])
+          nextCriteria[key].items = nextCriteria[key].items.map((item) => {
+            const old = (oldCriteria[key]?.items || []).find(
+              (candidate) => standardNumber(candidate.p, key) === standardNumber(item.p, key)
+            );
+            return old ? { ...item, min: old.min, max: old.max } : item;
+          });
+        const oldCond = (oldCriteria.cond?.items || []).find(
+          (item) => standardNumber(item.p, "cond") === 1413
+        );
+        if (oldCond) nextCriteria.cond.items[0] = { ...nextCriteria.cond.items[0], min: oldCond.min, max: oldCond.max };
+        nextCriteria.turbH.items = nextCriteria.turbH.items.map((item) => {
+          const target = standardNumber(item.p, "turbH");
+          const old = ["turbY", "turbH"]
+            .flatMap((key) => oldCriteria[key]?.items || [])
+            .find((candidate) => {
+              const value = standardNumber(candidate.p, "turbH");
+              return target === 0 ? value <= 0.5 : value === target;
+            });
+          return old ? { ...item, min: old.min, max: old.max } : item;
+        });
+        const newPhIndex = (value) => nextCriteria.ph.items.findIndex(
+          (item) => standardNumber(item.p, "ph") === value
+        );
+        const newTurbIndex = (value) => nextCriteria.turbH.items.findIndex(
+          (item) => targetStandardNumber(item.p) === value
+        );
+        function targetStandardNumber(value) { return Number(String(value).replace(",", ".")); }
+        const previousLotCode = (entry) =>
+          entry.lot || state.lots.find((lot) => lot.id === entry.lotRef)?.code || "não informado";
+        for (const p of state.pages) {
+          p.activity ||= "verification";
+          p.potableCollected ??= false;
+          const oldRows = p.rows || {};
+          const rows = Object.fromEntries(
+            Object.entries(oldRows).filter(([key]) => !/^\d+-\d+$/.test(key))
+          );
+          const save = (oldId, newId, standard) => {
+            const entry = oldRows[oldId];
+            if (entry && !rows[newId]) rows[newId] = { ...entry, standard };
+          };
+          const ph = oldRows["0-0"];
+          if (ph) {
+            const oldItem = oldCriteria.ph?.items?.[ph.standard ?? 0];
+            const value = oldItem ? standardNumber(oldItem.p, "ph") : NaN;
+            const index = newPhIndex(value);
+            if (index >= 0) rows[`ph-${index}`] = { ...ph, standard: index };
+            else p.notes = `${p.notes ? p.notes + "\n" : ""}Registro anterior de pH (${oldItem?.p || "padrão não identificado"}): leitura ${ph.obtained || "não informada"}; lote ${previousLotCode(ph)}.`;
+          }
+          const saveOnlyMatchingStandard = (oldId, newId, key, wanted) => {
+            const entry = oldRows[oldId];
+            if (!entry) return;
+            const oldItem = oldCriteria[key]?.items?.[entry.standard ?? 0];
+            const value = oldItem ? standardNumber(oldItem.p, key) : NaN;
+            if (value === wanted) save(oldId, newId, 0);
+            else if (entry.obtained || entry.lot)
+              p.notes = `${p.notes ? p.notes + "\n" : ""}Registro anterior de ${key} (${oldItem?.p || "padrão não identificado"}): leitura ${entry.obtained || "não informada"}; lote ${previousLotCode(entry)}.`;
+          };
+          saveOnlyMatchingStandard("0-1", "conductivity", "cond", 1413);
+          save("0-2", "oxygen", 0);
+          saveOnlyMatchingStandard("0-3", "orp", "orp", 240);
+          for (const oldId of ["1-0", "1-1"]) {
+            const entry = oldRows[oldId];
+            if (!entry) continue;
+            const oldKey = oldId === "1-0" ? "turbH" : "turbY";
+            const oldItem = oldCriteria[oldKey]?.items?.[entry.standard ?? 0];
+            const value = oldItem ? standardNumber(oldItem.p, oldKey) : NaN;
+            const index = Number.isFinite(value) ? newTurbIndex(value) : -1;
+            if (index >= 0 && !rows[`turb-${index}`]) rows[`turb-${index}`] = { ...entry, standard: index };
+            else if (entry.obtained) p.notes = `${p.notes ? p.notes + "\n" : ""}Registro anterior de turbidez (${oldItem?.p || "padrão não identificado"}): leitura ${entry.obtained}; lote ${previousLotCode(entry)}.`;
+          }
+          save("1-2", "chlorine", 0);
+          save("1-3", "temperature-air", 0);
+          save("1-4", "temperature-sample", 0);
+          p.rows = rows;
+        }
+        for (const lot of state.lots) {
+          const oldKey = lot.parameter;
+          const oldItem = oldCriteria[oldKey]?.items?.[lot.standard ?? 0];
+          if (oldKey === "turbH" || oldKey === "turbY") {
+            const value = oldItem ? standardNumber(oldItem.p, oldKey) : NaN;
+            const index = Number.isFinite(value) ? newTurbIndex(value) : -1;
+            lot.parameter = "turbH";
+            lot.standard = index;
+          } else if (oldCriteria[oldKey]?.items) {
+            const value = oldItem ? standardNumber(oldItem.p, oldKey) : NaN;
+            lot.standard = nextCriteria[oldKey]?.items?.findIndex(
+              (item) => standardNumber(item.p, oldKey) === value
+            ) ?? -1;
+          }
+        }
+        const invalidLots = new Set(state.lots.filter((lot) => +lot.standard < 0 || !nextCriteria[lot.parameter]).map((lot) => lot.id));
+        for (const p of state.pages) for (const entry of Object.values(p.rows || {})) {
+          if (!invalidLots.has(entry.lotRef)) continue;
+          const old = state.lots.find((lot) => lot.id === entry.lotRef);
+          entry.lot = old?.code || entry.lot || "";
+          entry.lotRef = "";
+          entry.manualLot = true;
+        }
+        state.lots = state.lots.filter((lot) => !invalidLots.has(lot.id));
+        state.criteria = nextCriteria;
+        state.formVersion = 2;
+      }
+      migrateCaderno();
+      function normalizeBackupState(incoming) {
+        const current = state;
+        try {
+          state = {
+            ...incoming,
+            lots: Array.isArray(incoming.lots) ? incoming.lots : [],
+          };
+          migrateCaderno();
+          return state;
+        } finally {
+          state = current;
+        }
+      }
       let pendingBackup = null;
       const $ = (s) => document.querySelector(s),
         page = () => state.pages[state.active];
@@ -1066,13 +1197,13 @@
         });
       }
       function selectedKey(groupIndex, rowIndex) {
-        return `${groupIndex}-${rowIndex}`;
+        return groupsFor(page())[groupIndex].rows[rowIndex].id;
       }
       function selectedStandard(g, r) {
-        const arr = groups[g].rows[r],
-          key = arr[1],
-          list = state.criteria[key].items;
-        return page().rows[selectedKey(g, r)]?.standard ?? 0;
+        const row = groupsFor(page())[g].rows[r];
+        return row.fixed
+          ? row.standard
+          : page().rows[row.id]?.standard ?? row.standard ?? 0;
       }
       function lotsFor(parameter, standard) {
         return state.lots.filter(
@@ -1108,10 +1239,10 @@
         }">`;
       }
       function status(g, r) {
-        const row = page().rows[selectedKey(g, r)] || {},
-          key = groups[g].rows[r][1],
-          item = state.criteria[key].items[row.standard ?? 0],
-          n = parseNum(row.obtained);
+        const definition = groupsFor(page())[g].rows[r];
+        const row = page().rows[definition.id] || {};
+        const item = state.criteria[definition.key].items[selectedStandard(g, r)];
+        const n = parseNum(row.obtained);
         if (!state.auto)
           return row.status === "C"
             ? "Conforme"
@@ -1152,9 +1283,7 @@
       }
       function renderSheet() {
         const p = page();
-        const all = groups.flatMap((gr, g) =>
-          gr.rows.map((_, r) => ({ g, r }))
-        );
+        const pageGroups = groupsFor(p);
         $("#sheet").innerHTML = `${
           p.simulated ? "" : ""
         }<header class="sheet-head"><div><div class="kicker">REN-AMS-001 · Rev. 04</div><h2>Calibração e verificação de equipamentos de campo</h2><p>Referência: PEN-AMS-001 · Preencher após calibração/verificação e realizar análise crítica.</p></div><div class="page-stamp">PÁGINA<b>${
@@ -1167,7 +1296,8 @@
         )}" placeholder="Modelo / identificação"></div><div class="field"><label>Responsável</label><input data-meta="responsible" value="${esc(
           p.responsible
         )}" placeholder="Nome"></div></div>
-${groups
+<div class="meta-grid"><div class="field"><label>Tipo de medição</label><select data-meta="activity"><option value="calibration" ${p.activity === "calibration" ? "selected" : ""}>Calibração</option><option value="verification" ${p.activity !== "calibration" ? "selected" : ""}>Verificação</option></select></div>${p.activity !== "calibration" && isMonday(p.date) ? `<div class="field"><label for="potableCollected">Coleta de água potável</label><label style="display:flex;align-items:center;gap:8px"><input id="potableCollected" data-meta="potableCollected" type="checkbox" ${p.potableCollected ? "checked" : ""}> Sim, foi coletada</label></div>` : ""}</div>
+${pageGroups
   .map(
     (group, g) =>
       `<section class="block"><div class="block-head"><h3>${
@@ -1176,11 +1306,11 @@ ${groups
         group.note
       }</span></div><div class="table-wrap"><table><thead><tr><th>Parâmetro</th><th>Valor do padrão</th><th>ID padrão / lote</th><th>Valor obtido</th><th>Conforme?</th></tr></thead><tbody>${group.rows
         .map((row, r) => {
-          const [name, key, count] = row,
+          const { name, key } = row,
             list = state.criteria[key].items,
             index = selectedStandard(g, r),
             it = list[index],
-            entry = p.rows[selectedKey(g, r)] || {},
+            entry = p.rows[row.id] || {},
             st = status(g, r);
           return `<tr><td><div class="param">${name}</div><div class="standard">Aceitação: ${
             it.absolute
@@ -1188,14 +1318,7 @@ ${groups
               : `${fmt(it.min)} a ${fmt(it.max)}`
           } ${
             state.criteria[key].unit
-          }</div></td><td><select class="cell-input" data-g="${g}" data-r="${r}" data-field="standard" aria-label="Padrão ${name}">${list
-            .map(
-              (x, i) =>
-                `<option value="${i}" ${index === i ? "selected" : ""}>${x.p}${
-                  state.criteria[key].unit ? " " + state.criteria[key].unit : ""
-                }</option>`
-            )
-            .join("")}</select></td><td>${lotCell(g, r, key, index, entry)}</td><td>${inputCell(
+          }</div></td><td><span class="cell-input" style="display:block">${esc(it.p)}${state.criteria[key].unit ? " " + esc(state.criteria[key].unit) : ""}</span></td><td>${lotCell(g, r, key, index, entry)}</td><td>${inputCell(
             g,
             r,
             "obtained",
@@ -1232,13 +1355,16 @@ ${groups
         }</div></footer>`;
         $("#sheet")
           .querySelectorAll("[data-meta]")
-          .forEach((el) =>
-            el.addEventListener("input", (e) => {
-              p[e.target.dataset.meta] = e.target.value;
+          .forEach((el) => {
+            const update = (e) => {
+              const field = e.target.dataset.meta;
+              p[field] = e.target.type === "checkbox" ? e.target.checked : e.target.value;
               persist();
-              if (e.target.dataset.meta === "reviewer") renderSheet();
-            })
-          );
+              if (["date", "activity", "potableCollected", "reviewer"].includes(field))
+                renderSheet();
+            };
+            el.addEventListener(el.tagName === "SELECT" || el.type === "checkbox" ? "change" : "input", update);
+          });
         $("#sheet")
           .querySelectorAll("[data-id]")
           .forEach((el) =>
@@ -1254,7 +1380,8 @@ ${groups
               const t = e.target,
                 g = +t.dataset.g,
                 r = +t.dataset.r,
-                k = selectedKey(g, r);
+                k = selectedKey(g, r),
+                definition = groupsFor(p)[g].rows[r];
               p.rows[k] ??= {};
               const field = t.dataset.field;
               if (field === "lotRef") {
@@ -1269,7 +1396,7 @@ ${groups
               } else if (field === "standard") {
                 p.rows[k].standard = +t.value;
                 if (!p.rows[k].manualLot)
-                  p.rows[k].lotRef = preferredLot(groups[g].rows[r][1], +t.value)?.id || "";
+                  p.rows[k].lotRef = preferredLot(definition.key, +t.value)?.id || "";
               } else {
                 p.rows[k][field] = t.value;
                 if (field === "lot") p.rows[k].manualLot = true;
@@ -1451,14 +1578,16 @@ ${groups
         return (Math.floor(Math.random() * (hi - lo + 1)) + lo) / factor;
       }
       function simulatePage(p) {
-        for (let g = 0; g < groups.length; g++)
-          for (let r = 0; r < groups[g].rows.length; r++) {
-            const key = groups[g].rows[r][1],
+        const pageGroups = groupsFor(p);
+        for (let g = 0; g < pageGroups.length; g++)
+          for (let r = 0; r < pageGroups[g].rows.length; r++) {
+            const definition = pageGroups[g].rows[r],
+              key = definition.key,
               items = state.criteria[key].items,
-              choice = Math.floor(Math.random() * items.length),
+              choice = definition.standard,
               item = items[choice],
               value = item.zero ? 0 : randomInRange(item.min, item.max, 2),
-              id = selectedKey(g, r);
+              id = definition.id;
             p.rows[id] = {
               ...(p.rows[id] || {}),
               standard: choice,
@@ -1596,7 +1725,7 @@ ${groups
         e.target.value = "";
         if (!f) return;
         try {
-          pendingBackup = validateBackup(JSON.parse(await f.text()));
+          pendingBackup = normalizeBackupState(validateBackup(JSON.parse(await f.text())));
           $("#backupPanel").hidden = false;
           $("#backupPanel").scrollIntoView({
             behavior: "smooth",
@@ -1639,6 +1768,7 @@ ${groups
         setTimeout(() => t.classList.remove("show"), 2200);
       }
       renderAll();
+      persist();
     </script>
   </body>
 </html>
