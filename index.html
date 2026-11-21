@@ -751,6 +751,7 @@
             </div>
             <button class="btn primary" id="periodGenerate">Criar páginas</button>
             <button class="btn" id="periodPrint">PDF deste período</button>
+            <button class="btn" id="periodDelete">Excluir páginas deste período</button>
           </div>
           <div class="subtle" style="margin-top: 10px">No diálogo de impressão, desative “Cabeçalhos e rodapés” para não incluir URL e data do navegador.</div>
         </div>
@@ -759,6 +760,14 @@
         <aside class="panel sidebar">
           <h2 class="section-title">Dados da página</h2>
           <div class="subtle">Identificação do registro de campo</div>
+          <div class="field" style="margin-top: 14px">
+            <label for="folderSelect">Pasta de medições</label>
+            <select id="folderSelect"></select>
+            <div class="actions" style="margin-top: 7px">
+              <button class="btn" id="newFolder">＋ Nova pasta</button>
+              <button class="btn" id="renameFolder">Renomear</button>
+            </div>
+          </div>
           <div class="modebox">
             <label
               ><input type="checkbox" id="autoMode" /> Calcular conformidade
@@ -932,6 +941,22 @@
         auto: false,
         criteria: structuredClone(defaultCriteria),
       };
+      function ensureFolders() {
+        if (!Array.isArray(state.folders) || !state.folders.length) {
+          state.folders = [{ id: "folder-default", name: "Medições atuais", pages: state.pages || [fresh()] }];
+        }
+        state.folders.forEach((folder, index) => {
+          folder.id ||= `folder-${index + 1}`;
+          folder.name = String(folder.name || `Pasta ${index + 1}`);
+          if (!Array.isArray(folder.pages)) folder.pages = [];
+          if (!folder.pages.length) folder.pages.push(fresh());
+        });
+        let activeFolder = state.folders.find((folder) => folder.id === state.activeFolderId);
+        if (!activeFolder) activeFolder = state.folders[0];
+        state.activeFolderId = activeFolder.id;
+        state.pages = activeFolder.pages;
+      }
+      ensureFolders();
       if (!state.criteria) state.criteria = structuredClone(defaultCriteria);
       if (!state.pages?.length) state.pages = [fresh()];
       if (!Array.isArray(state.lots)) state.lots = [];
@@ -942,7 +967,8 @@
         return Number(text.replace(",", "."));
       }
       function migrateCaderno() {
-        if (state.formVersion === 3) return;
+        if (state.formVersion === 4) return;
+        const allPages = (state.folders || []).flatMap((folder) => folder.pages || []);
         const oldCriteria = state.criteria || {};
         const nextCriteria = structuredClone(defaultCriteria);
         for (const key of ["oxygen", "chlorine"])
@@ -985,7 +1011,7 @@
         function targetStandardNumber(value) { return Number(String(value).replace(",", ".")); }
         const previousLotCode = (entry) =>
           entry.lot || state.lots.find((lot) => lot.id === entry.lotRef)?.code || "não informado";
-        for (const p of state.pages) {
+        for (const p of allPages) {
           p.activity ||= "verification";
           p.potableCollected ??= false;
           const oldRows = p.rows || {};
@@ -1047,7 +1073,7 @@
           }
         }
         const invalidLots = new Set(state.lots.filter((lot) => +lot.standard < 0 || !nextCriteria[lot.parameter]).map((lot) => lot.id));
-        for (const p of state.pages) for (const entry of Object.values(p.rows || {})) {
+        for (const p of allPages) for (const entry of Object.values(p.rows || {})) {
           if (!invalidLots.has(entry.lotRef)) continue;
           const old = state.lots.find((lot) => lot.id === entry.lotRef);
           entry.lot = old?.code || entry.lot || "";
@@ -1056,7 +1082,7 @@
         }
         state.lots = state.lots.filter((lot) => !invalidLots.has(lot.id));
         state.criteria = nextCriteria;
-        state.formVersion = 3;
+        state.formVersion = 4;
       }
       migrateCaderno();
       function normalizeBackupState(incoming) {
@@ -1066,6 +1092,7 @@
             ...incoming,
             lots: Array.isArray(incoming.lots) ? incoming.lots : [],
           };
+          ensureFolders();
           migrateCaderno();
           return state;
         } finally {
@@ -1076,6 +1103,8 @@
       const $ = (s) => document.querySelector(s),
         page = () => state.pages[state.active];
       function persist() {
+        const activeFolder = state.folders?.find((folder) => folder.id === state.activeFolderId);
+        if (activeFolder) activeFolder.pages = state.pages;
         localStorage.setItem("ren-ams-state", JSON.stringify(state));
         $("#saveState").textContent =
           "Salvo automaticamente · " +
@@ -1486,6 +1515,7 @@ ${pageGroups
         $("#autoMode").checked = state.auto;
       }
       function renderAll() {
+        foldersUI();
         tabsUI();
         syncMeta();
         criteriaUI();
@@ -1494,6 +1524,58 @@ ${pageGroups
         if (state.view === "lots") renderLots();
         else renderSheet();
       }
+      function foldersUI() {
+        const select = $("#folderSelect");
+        if (!select) return;
+        select.replaceChildren(...state.folders.map((folder) => {
+          const option = document.createElement("option");
+          option.value = folder.id;
+          option.textContent = folder.name;
+          return option;
+        }));
+        select.value = state.activeFolderId;
+      }
+      function switchFolder(id) {
+        const folder = state.folders.find((item) => item.id === id);
+        if (!folder || folder.id === state.activeFolderId) return;
+        persist();
+        state.activeFolderId = folder.id;
+        state.pages = folder.pages;
+        state.active = 0;
+        state.view = "pages";
+        persist();
+        renderAll();
+      }
+      $("#folderSelect").addEventListener("change", (event) => switchFolder(event.target.value));
+      $("#newFolder").onclick = () => {
+        const name = prompt("Nome da nova pasta:", "Nova pasta")?.trim();
+        if (!name) return;
+        if (state.folders.some((folder) => folder.name.toLocaleLowerCase() === name.toLocaleLowerCase())) {
+          toast("Já existe uma pasta com esse nome");
+          return;
+        }
+        const id = globalThis.crypto?.randomUUID?.() || `folder-${Date.now()}`;
+        const folder = { id, name, pages: [fresh()] };
+        state.folders.push(folder);
+        state.activeFolderId = id;
+        state.pages = folder.pages;
+        state.active = 0;
+        state.view = "pages";
+        persist();
+        renderAll();
+      };
+      $("#renameFolder").onclick = () => {
+        const folder = state.folders.find((item) => item.id === state.activeFolderId);
+        const name = prompt("Novo nome da pasta:", folder.name)?.trim();
+        if (!name) return;
+        if (state.folders.some((item) => item.id !== folder.id && item.name.toLocaleLowerCase() === name.toLocaleLowerCase())) {
+          toast("Já existe uma pasta com esse nome");
+          return;
+        }
+        folder.name = name;
+        persist();
+        renderAll();
+      };
       $("#autoMode").addEventListener("change", (e) => {
         state.auto = e.target.checked;
         persist();
@@ -1608,6 +1690,25 @@ ${pageGroups
           return;
         }
         printPages(indexes);
+      };
+      $("#periodDelete").onclick = () => {
+        const dates = getPeriodDates();
+        if (!dates) return;
+        const dateSet = new Set(dates);
+        const removed = state.pages.filter((item) => dateSet.has(item.date));
+        if (!removed.length) {
+          toast("Não há páginas cadastradas nesse período nesta pasta");
+          return;
+        }
+        if (!confirm(`Excluir ${removed.length} página(s) de ${dates[0]} a ${dates[dates.length - 1]} da pasta “${state.folders.find((folder) => folder.id === state.activeFolderId)?.name}”? Esta ação não pode ser desfeita.`)) return;
+        const activePage = page();
+        state.pages = state.pages.filter((item) => !dateSet.has(item.date));
+        if (!state.pages.length) state.pages = [fresh()];
+        state.active = Math.max(0, state.pages.indexOf(activePage));
+        state.view = "pages";
+        persist();
+        renderAll();
+        toast(`${removed.length} página(s) excluída(s) desta pasta`);
       };
       $("#print").onclick = () => window.print();
       $("#resetCriteria").onclick = () => {
@@ -1737,7 +1838,8 @@ ${pageGroups
           throw Error(
             "O arquivo não parece ser um backup válido deste caderno."
           );
-        for (const p of data.state.pages) {
+        const foldersToValidate = Array.isArray(data.state.folders) ? data.state.folders : [{ pages: data.state.pages }];
+        for (const p of foldersToValidate.flatMap((folder) => Array.isArray(folder.pages) ? folder.pages : [])) {
           if (
             !p ||
             typeof p !== "object" ||
@@ -1770,13 +1872,27 @@ ${pageGroups
         toast("Backup exportado");
       }
       function mergeBackup(incoming) {
-        const byKey = new Map(
-          state.pages.map((p) => [`${p.date}|${p.page}`, p])
-        );
-        for (const p of incoming.pages) byKey.set(`${p.date}|${p.page}`, p);
-        state.pages = [...byKey.values()].sort(
-          (a, b) => a.date.localeCompare(b.date) || a.page - b.page
-        );
+        const mergePages = (target, source) => {
+          const byKey = new Map(target.map((p) => [`${p.date}|${p.page}`, p]));
+          for (const p of source || []) byKey.set(`${p.date}|${p.page}`, p);
+          return [...byKey.values()].sort((a, b) => a.date.localeCompare(b.date) || a.page - b.page);
+        };
+        if (Array.isArray(incoming.folders) && incoming.folders.length) {
+          for (const sourceFolder of incoming.folders) {
+            let targetFolder = state.folders.find((folder) => folder.id === sourceFolder.id);
+            if (!targetFolder) {
+              const uniqueName = state.folders.some((folder) => folder.name === sourceFolder.name)
+                ? `${sourceFolder.name} (importada)` : sourceFolder.name;
+              targetFolder = { ...sourceFolder, name: uniqueName, pages: [] };
+              state.folders.push(targetFolder);
+            }
+            targetFolder.pages = mergePages(targetFolder.pages || [], sourceFolder.pages || []);
+          }
+        } else {
+          const activeFolder = state.folders.find((folder) => folder.id === state.activeFolderId);
+          activeFolder.pages = mergePages(activeFolder.pages, incoming.pages);
+        }
+        state.pages = state.folders.find((folder) => folder.id === state.activeFolderId).pages;
         state.active = 0;
         if (incoming.criteria) state.criteria = incoming.criteria;
         if (Array.isArray(incoming.lots)) {
@@ -1802,7 +1918,10 @@ ${pageGroups
             behavior: "smooth",
             block: "center",
           });
-          toast(`Backup validado · ${pendingBackup.pages.length} páginas`);
+          const backupPages = pendingBackup.folders?.length
+            ? pendingBackup.folders.reduce((total, folder) => total + (folder.pages?.length || 0), 0)
+            : pendingBackup.pages.length;
+          toast(`Backup validado · ${backupPages} páginas`);
         } catch (err) {
           pendingBackup = null;
           toast(err.message || "Não foi possível ler este backup");
@@ -1826,6 +1945,7 @@ ${pageGroups
         )
           return;
         state = { ...pendingBackup, active: 0, lots: pendingBackup.lots || [], view: "pages" };
+        ensureFolders();
         pendingBackup = null;
         persist();
         renderAll();
